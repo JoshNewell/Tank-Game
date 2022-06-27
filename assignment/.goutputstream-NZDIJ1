@@ -1,0 +1,462 @@
+//Includes
+#include <GL/glew.h>
+#include <GL/glut.h>
+#include <Shader.h>
+#include <Vector.h>
+#include <Matrix.h>
+#include <Mesh.h>
+#include <Texture.h>
+#include <SphericalCameraManipulator.h>
+#include <iostream>
+#include <math.h>
+#include <string>
+
+//define
+#define INITPAN 0.0
+#define INITTILT -1.56
+#define INITRAD 7.0
+#define PI 3.14159265
+
+#define TINITX 0
+#define TINITY 1
+#define TINITZ 0
+#define CINITX 0
+#define CINITY 3
+#define CINITZ 0
+
+//Function Prototypes
+bool initGL(int argc, char** argv);
+void display(void);
+void keyboard(unsigned char key, int x, int y);
+void keyUp(unsigned char key, int x, int y);
+void handleKeys();
+void mouse(int button, int state, int x, int y);
+void motion(int x, int y);
+void Timer(int value);
+
+//Function Prototypes(self)
+int drawMesh(int x, int y, int z, Mesh mesh, GLuint texture, float rotation, float rotX, float rotY, float rotZ, int scale);
+int drawMaze(int x, int y, int scale);
+int drawTank(int offX, int offY, int offZ, float rotation, int scale);
+int setCamera(int offX, int offY, int offZ, int rad);
+int turnRotation(float rotation);
+int updatePositions();
+
+void initShader();					                //Function to init Shader
+void initGeometry();					            //Function to init Geometry 
+void drawGeometry();					            //Function to draw Geometry
+void initTexture(std::string filename, GLuint & textureID);
+
+void render2dText(std::string text, float r, float g, float b, float x, float y);
+
+
+//Global Variables(self)
+GLuint shaderProgramID;			                    // Shader Program ID
+GLuint vertexPositionAttribute;		      // Vertex Position Attribute Location
+GLuint vertexNormalAttribute;		
+GLuint vertexTexcoordAttribute;
+
+//Material Prop (self)
+GLuint LightPositionUniformLocation;                // Light Position Uniform   
+GLuint AmbientUniformLocation;
+GLuint SpecularUniformLocation;
+GLuint SpecularPowerUniformLocation;
+
+Vector3f lightPosition= Vector3f(20.0,20.0,20.0);   // Light Position 
+Vector3f ambient    = Vector3f(0.1,0.1,0.1);
+Vector3f specular   = Vector3f(1.0,1.0,1.0);
+float specularPower =10.0;
+
+GLuint TextureMapUniformLocation;               	// Texture Map Location
+GLuint createTexture;				        // OpenGL Texture
+GLuint coinTexture;
+GLuint bodyTexture;
+
+//Viewing (self)
+SphericalCameraManipulator cameraManip;
+Matrix4x4 ModelViewMatrix;		                    // ModelView Matrix
+GLuint MVMatrixUniformLocation;		                // ModelView Matrix Uniform
+Matrix4x4 ProjectionMatrix;		                    // Projection Matrix
+GLuint ProjectionUniformLocation;	                // Projection Matrix Uniform Location
+
+//Meshs(self)
+Mesh create;
+Mesh coin;
+Mesh body;				                            // Mesh
+Mesh wheelB;
+Mesh wheelF;
+Mesh turret;
+
+
+//Screen size
+int screenWidth   	        = 720;
+int screenHeight   	        = 720;
+
+
+//Array of key states
+bool keyStates[256];
+
+//Movement
+float zStep(0);
+float xStep(0);
+float rStep(0);
+
+Vector3f tankPos(TINITX, TINITY, TINITZ);
+Vector3f cameraPos(CINITX, CINITY, CINITZ);
+
+//! Main Program Entry
+int main(int argc, char** argv){	
+    //init OpenGL
+    if(!initGL(argc, argv)){
+	return -1;
+    }
+
+    //Init Key States to false;    
+    for(int i = 0 ; i < 256; i++){
+        keyStates[i] = false;
+    }
+     
+    //Set up your program(self)
+    initShader();
+
+    create.loadOBJ("../models/cube.obj");    
+    initTexture("../models/Crate.bmp", createTexture);
+    coin.loadOBJ("../models/coin.obj");    
+    initTexture("../models/coin.bmp", coinTexture);
+    body.loadOBJ("../models/chassis.obj");    
+    initTexture("../models/hamvee.bmp", bodyTexture);
+    wheelB.loadOBJ("../models/back_wheel.obj");
+    wheelF.loadOBJ("../models/front_wheel.obj");
+    turret.loadOBJ("../models/turret.obj");
+
+    cameraManip.setPanTiltRadius(INITPAN, INITTILT, INITRAD);
+
+    //Enter main loop
+    glutMainLoop();
+
+    //Delete shader program
+    glDeleteProgram(shaderProgramID);
+
+    return 0;
+}
+
+//! Function to Initlise OpenGL
+bool initGL(int argc, char** argv){
+    //StratGL
+    glutInit(&argc, argv);//Init GLUT
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_DEPTH);//Set Display Mode
+    glutInitWindowSize(screenWidth, screenHeight);//Set Window Size
+    glutInitWindowPosition(200, 200);// Window Position
+    glutCreateWindow("World WAR Tank!");//Create Window
+    if (glewInit() != GLEW_OK) // Init GLEW
+	{
+	    std::cout << "Failed to initialize GLEW" << std::endl;
+	    return false;
+	}
+	
+    //Set Display function
+    glutDisplayFunc(display);
+	
+    //Set Interaction Functions
+    glutKeyboardFunc(keyboard);
+    glutKeyboardUpFunc(keyUp); 
+    glutMouseFunc(mouse);
+    glutPassiveMotionFunc(motion);
+    glutMotionFunc(motion);
+	
+    //self interaction
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_TEXTURE_2D);
+
+    //Start start timer function after 100 milliseconds
+    glutTimerFunc(100,Timer, 0);
+
+    return true;
+}
+
+
+
+
+//! Display Loop
+void display(void){
+
+   //Start up
+   handleKeys();//Handle keys
+   glViewport(0,0,screenWidth, screenHeight);//Set Viewport
+   glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );// Clear the screen
+
+   //Draw your scene (self)
+   glUseProgram(shaderProgramID);
+
+   //Lighting(self)
+
+   ProjectionMatrix.perspective(90, 1.0, 0.0001, 100.0);
+   glUniformMatrix4fv(	
+	ProjectionUniformLocation, 
+	1,							
+	false,						
+	ProjectionMatrix.getPtr());
+		      
+   glUniform3f(LightPositionUniformLocation, lightPosition.x,lightPosition.y,lightPosition.z);
+   glUniform4f(AmbientUniformLocation, ambient.x, ambient.y, ambient.z, 1.0);
+   glUniform4f(SpecularUniformLocation, specular.x, specular.y, specular.z, 1.0);
+   glUniform1f(SpecularPowerUniformLocation, specularPower);
+
+   updatePositions();
+	
+   setCamera(cameraPos.x, cameraPos.y, cameraPos.z, 10);
+
+
+   //create objects
+   drawTank(tankPos.x,tankPos.y,tankPos.z, rStep, 1);
+   drawMaze(20,20, 1);
+   drawMesh(0,5,0,create, createTexture,30,0,0,0, 1);
+
+   glUseProgram(0);
+
+
+   /*float pan = cameraManip.getPan();
+   std::stringstream s1;
+   s1 << pan;
+   std::string panS = "Pan: " + s1.str();
+
+   float tilt = cameraManip.getTilt();
+   std::stringstream s2;
+   s2 << tilt;
+   std::string tiltS = "Tilt: " +s2.str();
+
+   float radius = cameraManip.getRadius();
+   std::stringstream s3;
+   s3 << radius;
+   std::string radiusS = "Radius: " +s3.str();
+
+
+   render2dText(panS, 10.0, 10.0, 10.0, -1.0, 0.8);
+   render2dText(tiltS, 10.0, 10.0, 10.0, -1.0, 0.7);
+   render2dText(radiusS, 10.0, 10.0, 10.0, -1.0, 0.6);*/
+    
+   //Swap Buffers and post redisplay
+   glutSwapBuffers();
+   glutPostRedisplay();
+}
+
+
+
+//! Keyboard Interaction
+void keyboard(unsigned char key, int x, int y){
+   //Quits program when esc is pressed
+   if (key == 27){	//esc key code
+	exit(0);
+   }
+    
+   //Set key status
+   keyStates[key] = true;
+}
+
+//! Handle key up situation
+void keyUp(unsigned char key, int x, int y){
+   keyStates[key] = false;
+}
+
+
+//! Handle Keys
+void handleKeys(){
+   //keys should be handled here
+   if(keyStates['w']){
+        zStep -= 0.1;
+   }
+   if(keyStates['s']){
+        zStep += 0.1;
+   }
+   if(keyStates['d']){
+        xStep += 0.1;
+   }
+   if(keyStates['a']){
+        xStep -= 0.1;
+   }
+   if(keyStates['e']){
+        rStep -= 0.5;
+   }
+   if(keyStates['q']){
+        rStep += 0.5;
+   }
+}
+
+//! Mouse Interaction
+void mouse(int button, int state, int x, int y){
+ 
+}
+
+//! Motion
+void motion(int x, int y){
+   
+}
+
+//! Timer Function
+void Timer(int value){
+   //Call function again after 10 milli seconds
+   glutTimerFunc(10,Timer, 0);
+}
+
+
+//Self Functions
+int drawMesh(int x, int y, int z, Mesh mesh, GLuint texture, float rotation, float rotX, float rotY, float rotZ, int scale){
+
+   ModelViewMatrix.toIdentity();
+
+   ModelViewMatrix.scale(scale, scale, scale);
+
+   turnRotation(rotation);
+
+   ModelViewMatrix.translate(x, y, z);
+
+   Matrix4x4 n = cameraManip.apply(ModelViewMatrix);
+
+   glUniformMatrix4fv(	
+	MVMatrixUniformLocation,  	
+	1,					       
+	false,				     
+	n.getPtr());	      
+
+   glActiveTexture(GL_TEXTURE0);
+   glBindTexture(GL_TEXTURE_2D, texture);
+   glUniform1i(TextureMapUniformLocation, 0);
+
+        mesh.Draw(vertexPositionAttribute,vertexNormalAttribute,vertexTexcoordAttribute);
+
+   return 1;
+}
+
+int drawMaze(int x, int y, int scale){
+   
+   for(int i = 0; i < x; i++){
+      for(int j = 0; j < y; j++){
+         if(!((i==0) && (j==0))){
+            drawMesh(2*i,0,-2*j,create, createTexture,0,0,0,0, scale);
+         }
+      }
+   }
+   drawMesh(0,0,0,create, createTexture,0,0,0,0, scale);
+
+   return 1;
+}
+
+int drawTank(int offX, int offY, int offZ, float rotation, int scale){
+	
+   Vector3f rotPoint = turret.getMeshCentroid();
+
+   drawMesh(0+offX, 0+offY, 0+offZ, body, bodyTexture, rotation, 0, 1, 0, scale);
+   drawMesh(0+offX, 0+offY, 0+offZ, wheelB, bodyTexture, rotation, 0, 1, 0, scale);
+   drawMesh(0+offX, 0+offY, 0+offZ, wheelF, bodyTexture, rotation, 0, 1, 0, scale);
+   drawMesh(0+offX, 0+offY, 0+offZ, turret, bodyTexture, rotation, 0, 1, 0, scale);
+
+   return 1;
+}
+
+int setCamera(int offX, int offY, int offZ, int rad){
+
+   Vector3f adjust(offX,offY,offZ);
+   cameraManip.setFocus(turret.getMeshCentroid() + adjust);
+   cameraManip.setPanTiltRadius(INITPAN, INITTILT, rad);
+
+   return 1;
+}
+
+int turnRotation(float rotation){
+
+   if((rotation == 0)||(rotation == 90)||(rotation == 180)||(rotation == 270)){
+      return 0;
+   }
+
+   Matrix4x4 trans(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+   Matrix4x4 rot(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+   trans.toIdentity();
+   rot.toIdentity();
+
+   trans.translate(-tankPos.x, -tankPos.x, -tankPos.x);
+   rot.rotate(rotation, 0, 1, 0);
+   rot.inverse();
+
+   Matrix4x4 hold(trans*rot);
+
+   ModelViewMatrix = ModelViewMatrix * hold;
+   ModelViewMatrix.rotate(rotation, 0, 1, 0);
+   ModelViewMatrix.translate(tankPos.x, tankPos.x, tankPos.x);
+
+   return 1;
+}
+
+int updatePositions(){
+
+   tankPos.x = TINITX + xStep;
+   tankPos.z = TINITZ + zStep;
+   cameraPos.x = CINITX - xStep;
+   cameraPos.z = CINITZ - zStep;
+
+   return 1;
+}
+
+//Init Shader(self)
+void initShader(){
+   //Create shader
+   shaderProgramID = Shader::LoadFromFile("shader.vert","shader.frag");
+    
+   // Get a handle for our vertex position buffer
+   vertexPositionAttribute = glGetAttribLocation(shaderProgramID,  "aVertexPosition");
+   vertexNormalAttribute = glGetAttribLocation(shaderProgramID,    "aVertexNormal");
+   vertexTexcoordAttribute = glGetAttribLocation(shaderProgramID, "aVertexTexcoord");
+
+    //!
+   MVMatrixUniformLocation         = glGetUniformLocation(shaderProgramID, "MVMatrix_uniform"); 
+   ProjectionUniformLocation       = glGetUniformLocation(shaderProgramID, "ProjMatrix_uniform"); 
+   LightPositionUniformLocation    = glGetUniformLocation(shaderProgramID, "LightPosition_uniform"); 
+   AmbientUniformLocation          = glGetUniformLocation(shaderProgramID, "Ambient_uniform"); 
+   SpecularUniformLocation         = glGetUniformLocation(shaderProgramID, "Specular_uniform"); 
+   SpecularPowerUniformLocation    = glGetUniformLocation(shaderProgramID, "SpecularPower_uniform");
+   TextureMapUniformLocation       = glGetUniformLocation(shaderProgramID, "TextureMap_uniform"); 
+}
+
+void initTexture(std::string filename, GLuint & textureID){ // self
+   //Generate texture and bind
+   glGenTextures(1, &textureID);
+   glBindTexture(GL_TEXTURE_2D, textureID);
+    
+   //Set texture parameters
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); 
+
+   //Get texture Data
+   int width, height;
+   char* data;
+   Texture::LoadBMP(filename, width, height, data);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+   glBindTexture(GL_TEXTURE_2D, 0);
+
+   //Cleanup data - copied to GPU
+   delete[] data;
+}
+
+void render2dText(std::string text, float r, float g, float b, float x, float y){
+   glColor3f(r,g,b);
+   glRasterPos2f(x, y); // window coordinates
+   for(unsigned int i = 0; i < text.size(); i++){
+      glutBitmapCharacter(GLUT_BITMAP_HELVETICA_18, text[i]);
+   }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
